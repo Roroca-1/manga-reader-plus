@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页漫画增强阅读器
 // @namespace    https://github.com/Roroca-1/manga-reader-plus
-// @version      1.3.1
+// @version      1.3.2
 // @description  桌面级网页漫画增强阅读器：悬浮工具栏、单页/双页/条漫模式、左右翻页方向、画面适配与缩放、封面单显、跨页自动识别、页面总览与完整快捷键支持。
 // @author       Roroca-1
 // @license      MIT
@@ -591,7 +591,7 @@
       touch-action: manipulation;
     }
 
-    #cms-root button:focus-visible,
+    #cms-root button:not(.cms-click-zone):focus-visible,
     #cms-root a:focus-visible,
     #cms-root input:focus-visible {
       outline: 2px solid var(--cms-ring);
@@ -797,17 +797,21 @@
       pointer-events: auto;
     }
 
-    .cms-click-zone {
+    #cms-root .cms-click-zone {
       position: relative;
-      background: transparent;
-      border: none;
+      background: transparent !important;
+      border: none !important;
+      outline: none !important;
+      box-shadow: none !important;
       padding: 0;
       margin: 0;
       cursor: pointer;
     }
 
-    .cms-click-zone:focus-visible {
-      outline: none;
+    #cms-root .cms-click-zone:focus,
+    #cms-root .cms-click-zone:focus-visible {
+      outline: none !important;
+      box-shadow: none !important;
     }
 
     .cms-edge-hint {
@@ -2856,12 +2860,15 @@
     window.addEventListener('keydown', (e) => {
       if (e.target.closest('input:not([type="range"]), textarea, select')) return;
 
-      if (e.altKey && (e.key === 'o' || e.key === 'O')) {
+      if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'o' || e.key === 'O')) {
         e.preventDefault();
         e.stopImmediatePropagation();
         toggleOriginalPage();
         return;
       }
+
+      // Never intercept browser shortcuts (Ctrl+R, Ctrl+F, Ctrl+C, Cmd+R, etc.)
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       if (!document.body.classList.contains('cms-active')) return;
 
