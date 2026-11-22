@@ -1,6 +1,6 @@
-# 拷贝漫画增强阅读器
+# 网页漫画增强阅读器
 
-为 [拷贝漫画（mangacopy.com）](https://www.mangacopy.com/) 及常用镜像站打造的桌面级浏览器阅读器脚本，替换原站简陋的网页阅读器。
+桌面级网页漫画阅读器脚本，用来替换漫画网站简陋的原生网页阅读器。目前已支持拷贝漫画及其常见镜像站，后续可扩展适配更多漫画站点。
 
 ## 界面预览
 
@@ -20,7 +20,7 @@
 - **画面适配与缩放**：适应屏幕、适应高度、适应宽度、原图 `1:1`，以及 `50%–250%` 自定义缩放
 - **顺手交互**：点击翻页区域、滚轮翻页、悬浮进度条预览、页面总览网格、4 套画布主题（曜石黑 / 深炭灰 / 纯黑 / 暖纸白）
 - **进度记忆与逃生舱**：自动记住阅读设置与各章节阅读页码；随时按 `Alt + O` 切回原版页面
-- **零外部依赖**：本地使用 Web Crypto 直接解密章节页数据，不额外请求站内接口
+- **零外部依赖**：本地解析当前页面的章节数据，不额外请求站内接口
 
 ## 安装方式
 
@@ -28,7 +28,7 @@
 
 1. 先安装浏览器脚本管理器：[Violentmonkey（暴力猴）](https://violentmonkey.github.io/) 或 [Tampermonkey（篡改猴）](https://www.tampermonkey.net/)
 2. 点击下方链接一键安装（后续支持自动更新）：
-   👉 **[点击安装 copymanga-reader.user.js](https://raw.githubusercontent.com/Roroca-1/copymanga-studio-reader/main/copymanga-reader.user.js)**
+   👉 **[点击安装 manga-reader-plus.user.js](https://raw.githubusercontent.com/Roroca-1/manga-reader-plus/main/manga-reader-plus.user.js)**
 
 ### 方式二：浏览器扩展（Chromium 内核）
 
@@ -47,9 +47,9 @@
 | `H` / `S` / `G` / `?` | 隐藏工具栏 / 阅读设置 / 页面总览 / 快捷键说明 |
 | `Shift + F` / `Alt + O` | 全屏模式 / 切换原版页面 |
 
-## 支持域名
+## 支持范围
 
-`mangacopy.com`、`copymanga.tv`、`copymanga.site`、`copymanga.org`、`2025copy.com`、`2026copy.com`
+目前支持拷贝漫画及其常见镜像站，后续计划逐步适配更多在线漫画站点。
 
 ## 开源协议
 

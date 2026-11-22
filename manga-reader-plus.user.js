@@ -1,14 +1,14 @@
 // ==UserScript==
-// @name         拷贝漫画增强阅读器
-// @namespace    https://github.com/Roroca-1/copymanga-studio-reader
-// @version      1.2.0
-// @description  为拷贝漫画（mangacopy.com 及镜像站）打造的桌面级阅读器：悬浮工具栏、单页/双页/条漫模式、左右翻页方向、画面适配与缩放、封面单显、跨页自动识别、页面总览与完整快捷键支持。
+// @name         网页漫画增强阅读器
+// @namespace    https://github.com/Roroca-1/manga-reader-plus
+// @version      1.2.1
+// @description  桌面级网页漫画增强阅读器：悬浮工具栏、单页/双页/条漫模式、左右翻页方向、画面适配与缩放、封面单显、跨页自动识别、页面总览与完整快捷键支持（目前支持拷贝漫画及常见镜像站）。
 // @author       Roroca-1
 // @license      MIT
-// @homepageURL  https://github.com/Roroca-1/copymanga-studio-reader
-// @supportURL   https://github.com/Roroca-1/copymanga-studio-reader/issues
-// @updateURL    https://raw.githubusercontent.com/Roroca-1/copymanga-studio-reader/main/copymanga-reader.user.js
-// @downloadURL  https://raw.githubusercontent.com/Roroca-1/copymanga-studio-reader/main/copymanga-reader.user.js
+// @homepageURL  https://github.com/Roroca-1/manga-reader-plus
+// @supportURL   https://github.com/Roroca-1/manga-reader-plus/issues
+// @updateURL    https://raw.githubusercontent.com/Roroca-1/manga-reader-plus/main/manga-reader-plus.user.js
+// @downloadURL  https://raw.githubusercontent.com/Roroca-1/manga-reader-plus/main/manga-reader-plus.user.js
 // @match        *://*.mangacopy.com/comic/*/chapter/*
 // @match        *://*.copymanga.tv/comic/*/chapter/*
 // @match        *://*.copymanga.site/comic/*/chapter/*
