@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页漫画增强阅读器
 // @namespace    https://github.com/Roroca-1/manga-reader-plus
-// @version      1.2.1
-// @description  桌面级网页漫画增强阅读器：悬浮工具栏、单页/双页/条漫模式、左右翻页方向、画面适配与缩放、封面单显、跨页自动识别、页面总览与完整快捷键支持（目前支持拷贝漫画及常见镜像站）。
+// @version      1.3.0
+// @description  桌面级网页漫画增强阅读器：悬浮工具栏、单页/双页/条漫模式、左右翻页方向、画面适配与缩放、封面单显、跨页自动识别、页面总览与完整快捷键支持。
 // @author       Roroca-1
 // @license      MIT
 // @homepageURL  https://github.com/Roroca-1/manga-reader-plus
@@ -15,6 +15,13 @@
 // @match        *://*.copymanga.org/comic/*/chapter/*
 // @match        *://*.2025copy.com/comic/*/chapter/*
 // @match        *://*.2026copy.com/comic/*/chapter/*
+// @match        *://nhentai.net/g/*/*
+// @match        *://*.18comic.vip/photo/*
+// @match        *://*.18comic.org/photo/*
+// @match        *://*.jmcomic.me/photo/*
+// @match        *://*.jmcomic1.me/photo/*
+// @match        *://*.zerobyw33.com/*
+// @match        *://*.zerobyw*.com/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -91,9 +98,67 @@
     return Math.min(max, Math.max(min, v));
   }
 
-  // --- CopyManga Data Extraction ---
+  // --- Minimal Pure-JS MD5 (RFC 1321, used for 18comic image unscrambling) ---
 
-  async function decryptContentKey(cct, contentKey) {
+  function md5(str) {
+    const bytes = new TextEncoder().encode(str);
+    const bitLen = bytes.length * 8;
+    const padLen = ((56 - ((bytes.length + 1) % 64)) + 64) % 64;
+    const buf = new Uint8Array(bytes.length + 1 + padLen + 8);
+    buf.set(bytes);
+    buf[bytes.length] = 0x80;
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(buf.length - 8, bitLen >>> 0, true);
+    dv.setUint32(buf.length - 4, Math.floor(bitLen / 0x100000000), true);
+
+    let a0 = 0x67452301;
+    let b0 = 0xefcdab89;
+    let c0 = 0x98badcfe;
+    let d0 = 0x10325476;
+
+    const s = [
+      7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+      5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+      4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+      6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    const K = new Uint32Array(64);
+    for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) >>> 0;
+
+    for (let offset = 0; offset < buf.length; offset += 64) {
+      const M = new Uint32Array(16);
+      for (let j = 0; j < 16; j++) M[j] = dv.getUint32(offset + j * 4, true);
+
+      let A = a0, B = b0, C = c0, D = d0;
+      for (let i = 0; i < 64; i++) {
+        let F, g;
+        if (i < 16) { F = (B & C) | (~B & D); g = i; }
+        else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
+        else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16; }
+        else { F = C ^ (B | ~D); g = (7 * i) % 16; }
+        F = (F + A + K[i] + M[g]) >>> 0;
+        A = D;
+        D = C;
+        C = B;
+        B = (B + ((F << s[i]) | (F >>> (32 - s[i])))) >>> 0;
+      }
+      a0 = (a0 + A) >>> 0;
+      b0 = (b0 + B) >>> 0;
+      c0 = (c0 + C) >>> 0;
+      d0 = (d0 + D) >>> 0;
+    }
+
+    const toHex = (n) => {
+      let out = '';
+      for (let i = 0; i < 4; i++) out += ((n >>> (i * 8)) & 0xff).toString(16).padStart(2, '0');
+      return out;
+    };
+    return toHex(a0) + toHex(b0) + toHex(c0) + toHex(d0);
+  }
+
+  // --- Site Adapters ---
+
+  async function decryptCopyMangaKey(cct, contentKey) {
     if (!cct || !contentKey || contentKey.length < 32) return null;
     const enc = new TextEncoder();
     const keyBytes = enc.encode(cct);
@@ -106,63 +171,253 @@
       cipherBytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
     }
 
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBytes,
-      { name: 'AES-CBC' },
-      false,
-      ['decrypt']
-    );
-    const plainBuf = await crypto.subtle.decrypt(
-      { name: 'AES-CBC', iv: ivBytes },
-      cryptoKey,
-      cipherBytes
-    );
+    const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']);
+    const plainBuf = await crypto.subtle.decrypt({ name: 'AES-CBC', iv: ivBytes }, cryptoKey, cipherBytes);
     const parsed = JSON.parse(new TextDecoder().decode(plainBuf));
     if (!Array.isArray(parsed)) return null;
     return parsed.map((item) => item?.url).filter(Boolean);
   }
 
-  function scrapeFallbackImages() {
-    const imgs = document.querySelectorAll('.comicContent-list img');
-    const urls = [];
-    imgs.forEach((img) => {
-      const src = img.getAttribute('data-src') || img.getAttribute('src');
-      if (src && !src.includes('loading.jpg')) urls.push(src);
-    });
-    return urls;
+  function findLinkByText(regex, selectors = 'a') {
+    const anchors = document.querySelectorAll(selectors);
+    for (const a of anchors) {
+      const href = a.getAttribute('href');
+      if (!href || href === '#' || href.startsWith('javascript:')) continue;
+      if (regex.test(a.textContent.trim())) return a.href;
+    }
+    return null;
   }
 
-  function extractPageMeta() {
-    const headerRaw = document.querySelector('h4.header')?.textContent?.trim() || document.title;
-    const parts = headerRaw.split('/');
-    const comicTitle = parts.length > 1 ? parts[0].trim() : headerRaw;
-    const chapterTitle = parts.length > 1 ? parts.slice(1).join('/').trim() : '';
+  const SITE_ADAPTERS = [
+    // 1. CopyManga & mirrors
+    {
+      id: 'copymanga',
+      match: () => /(?:mangacopy|copymanga|202[4-9]copy)\./i.test(location.hostname) && /\/comic\/[^/]+\/chapter\//.test(location.pathname),
+      extract: async () => {
+        let urls = null;
+        try {
+          urls = await decryptCopyMangaKey(window.cct, window.contentKey);
+        } catch (err) {
+          console.warn('[MangaReader+] CopyManga decryption failed, falling back to DOM:', err);
+        }
+        if (!urls || urls.length === 0) {
+          urls = [];
+          document.querySelectorAll('.comicContent-list img').forEach((img) => {
+            const src = img.getAttribute('data-src') || img.getAttribute('src');
+            if (src && !src.includes('loading.jpg')) urls.push(src);
+          });
+        }
+        const headerRaw = document.querySelector('h4.header')?.textContent?.trim() || document.title;
+        const parts = headerRaw.split('/');
+        const normalizeHref = (a) => {
+          if (!a) return null;
+          const href = a.getAttribute('href');
+          if (!href || a.classList.contains('prev-null') || a.classList.contains('next-null')) return null;
+          return a.href;
+        };
+        return {
+          urls,
+          meta: {
+            comicTitle: parts.length > 1 ? parts[0].trim() : headerRaw,
+            chapterTitle: parts.length > 1 ? parts.slice(1).join('/').trim() : '',
+            chapterProgressText: document.querySelector('.comicContent-footer-txt')?.textContent?.trim() || '',
+            prevHref: normalizeHref(document.querySelector('.comicContent-prev:not(.index):not(.list) a')),
+            nextHref: normalizeHref(document.querySelector('.comicContent-next a')),
+            tocHref: document.querySelector('.comicContent-prev.list a')?.href || location.pathname.split('/chapter/')[0],
+            chapterKey: location.pathname,
+          },
+        };
+      },
+      cleanup: () => {
+        window.onscroll = null;
+        document.body.onmouseup = null;
+      },
+    },
 
-    const prevAnchor = document.querySelector('.comicContent-prev:not(.index):not(.list) a');
-    const nextAnchor = document.querySelector('.comicContent-next a');
-    const tocAnchor = document.querySelector('.comicContent-prev.list a');
+    // 2. nhentai.net
+    {
+      id: 'nhentai',
+      match: () => /(?:^|\.)nhentai\.net$/i.test(location.hostname) && /^\/g\/\d+\/\d+\/?$/.test(location.pathname),
+      extract: async () => {
+        let gallery = window._gallery;
+        if (typeof gallery === 'string') {
+          try { gallery = JSON.parse(gallery); } catch { gallery = null; }
+        }
+        if (!gallery || !gallery.images?.pages?.length) return null;
 
-    const normalizeHref = (anchor) => {
-      if (!anchor) return null;
-      const href = anchor.getAttribute('href');
-      if (!href || href === '' || anchor.classList.contains('prev-null') || anchor.classList.contains('next-null')) {
-        return null;
-      }
-      return anchor.href;
-    };
+        const extMap = { j: 'jpg', p: 'png', g: 'gif', w: 'webp' };
+        let cdnOrigin = 'https://i.nhentai.net';
+        const curImgSrc = document.querySelector('#image-container img')?.src;
+        if (curImgSrc) {
+          try { cdnOrigin = new URL(curImgSrc).origin; } catch {}
+        }
 
-    const chapterProgressText = document.querySelector('.comicContent-footer-txt')?.textContent?.trim() || '';
+        const mediaId = gallery.media_id;
+        const urls = gallery.images.pages.map((p, i) => `${cdnOrigin}/galleries/${mediaId}/${i + 1}.${extMap[p.t] || 'jpg'}`);
+        const matchPath = location.pathname.match(/^\/g\/(\d+)\/(\d+)/);
+        const galleryId = matchPath ? matchPath[1] : String(gallery.id || '');
+        const initialPage = matchPath ? Math.max(0, parseInt(matchPath[2], 10) - 1) : 0;
 
-    return {
-      comicTitle,
-      chapterTitle,
-      chapterProgressText,
-      prevHref: normalizeHref(prevAnchor),
-      nextHref: normalizeHref(nextAnchor),
-      tocHref: tocAnchor?.href || location.pathname.split('/chapter/')[0],
-      chapterKey: location.pathname,
-    };
+        return {
+          urls,
+          initialPage,
+          meta: {
+            comicTitle: gallery.title?.japanese || gallery.title?.pretty || gallery.title?.english || document.title,
+            chapterTitle: `#${galleryId}`,
+            chapterProgressText: '',
+            prevHref: null,
+            nextHref: null,
+            tocHref: `/g/${galleryId}/`,
+            chapterKey: `/nhentai/g/${galleryId}`,
+          },
+        };
+      },
+    },
+
+    // 3. 18comic / JMComic & mirrors (with built-in canvas image unscrambling)
+    {
+      id: 'jmcomic',
+      match: () => /(?:18comic|jmcomic|jm-comic)/i.test(location.hostname) && /\/photo\/\d+/.test(location.pathname),
+      extract: async () => {
+        const imgs = document.querySelectorAll('.scramble-page img, .panel-body img.lazy_img, .row.thumb-overlay-albums img');
+        const urls = [];
+        const seen = new Set();
+        imgs.forEach((img) => {
+          const src = img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('src');
+          if (!src || /blank\.jpg|loading\.gif|\/media\/logo/i.test(src) || seen.has(src)) return;
+          seen.add(src);
+          urls.push(src);
+        });
+
+        const aidMatch = location.pathname.match(/\/photo\/(\d+)/);
+        const aid = Number(window.aid || (aidMatch ? aidMatch[1] : 0));
+        const scrambleId = Number(window.scramble_id || 220980);
+
+        const titleRaw = document.querySelector('h1, .panel-heading .pull-left')?.textContent?.trim() || document.title.replace(/\s*[-|].*$/, '');
+        const tocHref = document.querySelector('a[href*="/album/"]')?.href || '/';
+        const prevHref = findLinkByText(/上一[話话章]/);
+        const nextHref = findLinkByText(/下一[話话章]/);
+
+        return {
+          urls,
+          aid,
+          scrambleId,
+          meta: {
+            comicTitle: titleRaw,
+            chapterTitle: aid ? `JM${aid}` : '',
+            chapterProgressText: '',
+            prevHref,
+            nextHref,
+            tocHref,
+            chapterKey: `/jmcomic/photo/${aid || location.pathname}`,
+          },
+        };
+      },
+      renderCanvas: (img, url, ctxData) => {
+        const aid = ctxData.aid || 0;
+        const scrambleId = ctxData.scrambleId || 220980;
+        if (!aid || aid < scrambleId || /\.gif(\?|$)/i.test(url)) return null;
+
+        const fileMatch = url.match(/\/([^/?#]+)\.[a-z0-9]+(?:[?#]|$)/i);
+        const pageId = fileMatch ? fileMatch[1] : '';
+        if (!pageId) return null;
+
+        let num = 0;
+        if (typeof window.get_num === 'function') {
+          try { num = Number(window.get_num(aid, pageId)) || 0; } catch {}
+        }
+        if (!num) {
+          if (aid < 268850) {
+            num = 10;
+          } else {
+            const hash = md5(String(aid) + String(pageId));
+            const code = hash.charCodeAt(hash.length - 1);
+            num = aid > 421925 ? (code % 8 + 1) * 2 : (code % 10 + 1) * 2;
+          }
+        }
+        if (num <= 1) return null;
+
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        if (!w || !h) return null;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        const rem = h % num;
+        const sliceH = Math.floor(h / num);
+
+        for (let m = 0; m < num; m++) {
+          let copyH = sliceH;
+          let dy = sliceH * m;
+          const sy = h - sliceH * (m + 1) - rem;
+          if (m === 0) copyH += rem;
+          else dy += rem;
+          ctx.drawImage(img, 0, sy, w, copyH, 0, dy, w, copyH);
+        }
+        return canvas;
+      },
+    },
+
+    // 4. Zerobyw (Zero搬运网 / Discuz jameson_manhua)
+    {
+      id: 'zerobyw',
+      match: () => /zerobyw\d*\./i.test(location.hostname) && (
+        /a=bofang/i.test(location.search) ||
+        /\/manhua\//i.test(location.pathname) ||
+        Boolean(document.querySelector('.comic_wraCon img, .rd-manga img, #reader-container img, .uk-container img[src*="attachment"]'))
+      ),
+      extract: async () => {
+        const selectors = [
+          '.comic_wraCon img',
+          '.rd-manga img',
+          '#reader-container img',
+          '.comic-read img',
+          '.uk-container .uk-grid img',
+          '.uk-section img',
+          'img[src*="/data/attachment/"]',
+        ];
+        const urls = [];
+        const seen = new Set();
+        const isNoise = (src) => /avatar|uc_server|static\/image\/common|smiley|logo|qrcode|ads?\//i.test(src);
+
+        for (const sel of selectors) {
+          const found = document.querySelectorAll(sel);
+          if (found.length === 0) continue;
+          found.forEach((img) => {
+            const src = img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('src');
+            if (!src || isNoise(src) || seen.has(src)) return;
+            seen.add(src);
+            urls.push(src);
+          });
+          if (urls.length > 0) break;
+        }
+
+        const titleEl = document.querySelector('h1, .uk-breadcrumb li:last-child, .comic_title');
+        const titleRaw = titleEl?.textContent?.trim() || document.title.replace(/\s*[-_|].*$/, '');
+        const prevHref = findLinkByText(/上一[話话章页]/);
+        const nextHref = findLinkByText(/下一[話话章页]/);
+        const tocHref = findLinkByText(/目录|目錄|返回漫画|返回列表/) || '/';
+
+        return {
+          urls,
+          meta: {
+            comicTitle: titleRaw,
+            chapterTitle: '',
+            chapterProgressText: '',
+            prevHref,
+            nextHref,
+            tocHref,
+            chapterKey: location.pathname + location.search,
+          },
+        };
+      },
+    },
+  ];
+
+  function detectAdapter() {
+    return SITE_ADAPTERS.find((a) => a.match()) || null;
   }
 
   // --- SVG Icons (crisp 16px stroke icons, decorative aria-hidden) ---
@@ -1541,32 +1796,29 @@
   // --- Main Reader App ---
 
   async function init() {
-    let urls = null;
-    try {
-      urls = await decryptContentKey(window.cct, window.contentKey);
-    } catch (err) {
-      console.warn('[CopyManga Studio] Decryption failed, falling back to DOM scrape:', err);
-    }
+    const adapter = detectAdapter();
+    if (!adapter) return;
 
-    if (!urls || urls.length === 0) {
-      urls = scrapeFallbackImages();
-    }
-    if (!urls || urls.length === 0) {
-      console.warn('[CopyManga Studio] No chapter images found on this page.');
+    const extracted = await adapter.extract();
+    if (!extracted || !extracted.urls || extracted.urls.length === 0) {
+      console.warn(`[MangaReader+] (${adapter.id}) No chapter images found on this page.`);
       return;
     }
 
-    const meta = extractPageMeta();
+    const { urls, meta } = extracted;
     const settings = loadSettings();
     const total = urls.length;
-    let currentIndex = clamp(loadProgress(meta.chapterKey), 0, total - 1);
+    const savedIndex = loadProgress(meta.chapterKey);
+    let currentIndex = clamp(
+      typeof extracted.initialPage === 'number' ? extracted.initialPage : savedIndex,
+      0,
+      total - 1
+    );
 
     const pageDimensions = new Map();
     const preloadCache = new Map();
 
-    // Remove CopyManga's broken scroll & mouseup hijackers
-    window.onscroll = null;
-    document.body.onmouseup = null;
+    if (typeof adapter.cleanup === 'function') adapter.cleanup();
 
     const styleEl = document.createElement('style');
     styleEl.id = 'cms-styles';
@@ -2016,11 +2268,26 @@
         });
       };
 
-      img.onload = () => {
+      const finalizeVisual = (isCached) => {
         stateBox.style.display = 'none';
-        img.style.display = 'block';
-        if (img.classList.contains('is-entering')) {
-          requestAnimationFrame(() => img.classList.add('is-loaded'));
+        let visualEl = img;
+        if (typeof adapter.renderCanvas === 'function') {
+          try {
+            const canvas = adapter.renderCanvas(img, urls[idx], extracted);
+            if (canvas) {
+              canvas.className = 'cms-page-img';
+              canvas.setAttribute('aria-label', `第 ${idx + 1} 页`);
+              img.replaceWith(canvas);
+              visualEl = canvas;
+            }
+          } catch (err) {
+            console.warn('[MangaReader+] Canvas unscramble fallback to raw img:', err);
+          }
+        }
+        visualEl.style.display = 'block';
+        if (!isCached) {
+          visualEl.classList.add('is-entering');
+          requestAnimationFrame(() => visualEl.classList.add('is-loaded'));
         }
         const isWide = img.naturalWidth > img.naturalHeight * 1.12;
         const prev = pageDimensions.get(idx);
@@ -2030,22 +2297,17 @@
         }
       };
 
+      img.onload = () => finalizeVisual(false);
       img.onerror = showError;
+      img.style.display = 'none';
+      slot.appendChild(stateBox);
+      slot.appendChild(img);
       img.src = urls[idx];
 
       if (img.complete && img.naturalWidth > 0) {
-        // Cached: instant display, zero fade
-        stateBox.style.display = 'none';
-        img.style.display = 'block';
-        const isWide = img.naturalWidth > img.naturalHeight * 1.12;
-        pageDimensions.set(idx, { w: img.naturalWidth, h: img.naturalHeight, isWide });
-      } else {
-        img.style.display = 'none';
-        img.classList.add('is-entering');
+        finalizeVisual(true);
       }
 
-      slot.appendChild(stateBox);
-      slot.appendChild(img);
       return slot;
     }
 
@@ -2698,7 +2960,7 @@
     renderStage();
   }
 
-  if (window.contentKey || document.readyState === 'complete') {
+  if (document.readyState === 'complete' || window.contentKey || window._gallery) {
     init();
   } else {
     window.addEventListener('load', init, { once: true });
