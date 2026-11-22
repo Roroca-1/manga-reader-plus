@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页漫画增强阅读器
 // @namespace    https://github.com/Roroca-1/manga-reader-plus
-// @version      1.3.2
+// @version      1.3.3
 // @description  桌面级网页漫画增强阅读器：悬浮工具栏、单页/双页/条漫模式、左右翻页方向、画面适配与缩放、封面单显、跨页自动识别、页面总览与完整快捷键支持。
 // @author       Roroca-1
 // @license      MIT
@@ -18,11 +18,11 @@
 // @match        *://*.2024copy.com/comic/*/chapter/*
 // @match        *://*.2025copy.com/comic/*/chapter/*
 // @match        *://*.2026copy.com/comic/*/chapter/*
-// @match        *://nhentai.net/g/*/*
-// @match        *://*.nhentai.net/g/*/*
-// @match        *://*.nhentai.to/g/*/*
-// @match        *://*.nhentai.xxx/g/*/*
-// @match        *://*.nhentai.website/g/*/*
+// @match        *://nhentai.net/*
+// @match        *://*.nhentai.net/*
+// @match        *://*.nhentai.to/g/*
+// @match        *://*.nhentai.xxx/g/*
+// @match        *://*.nhentai.website/g/*
 // @match        *://*.18comic.vip/photo/*
 // @match        *://*.18comic.org/photo/*
 // @match        *://*.18comic.ink/photo/*
@@ -37,7 +37,7 @@
 // @match        *://*.zerobyw33.com/*
 // @match        *://*.zerobyw.com/*
 // @include      /^https?:\/\/([^/]*\.)?(mangacopy|copymanga|\d{4}copy)\.[^/]+\/comic\/[^/]+\/chapter\//i
-// @include      /^https?:\/\/([^/]*\.)?nhentai\.[^/]+\/g\/\d+\/\d+/i
+// @include      /^https?:\/\/([^/]*\.)?nhentai\.[^/]+\//i
 // @include      /^https?:\/\/([^/]*\.)?(18comic|jmcomic\d*|jm-comic\d*|jm18c[^.]*)\.[^/]+\/photo\/\d+/i
 // @include      /^https?:\/\/([^/]*\.)?zerobyw[a-z0-9-]*\.[^/]+\//i
 // @grant        none
@@ -252,35 +252,65 @@
       },
     },
 
-    // 2. nhentai & mirrors
+    // 2. nhentai & mirrors (supports both legacy window._gallery and SvelteKit API v2)
     {
       id: 'nhentai',
       match: () => /(?:^|\.)nhentai\./i.test(location.hostname) && /^\/g\/\d+\/\d+\/?$/.test(location.pathname),
       extract: async () => {
-        let gallery = window._gallery;
-        if (typeof gallery === 'string') {
-          try { gallery = JSON.parse(gallery); } catch { gallery = null; }
-        }
-        if (!gallery || !gallery.images?.pages?.length) return null;
+        const matchPath = location.pathname.match(/^\/g\/(\d+)\/(\d+)/);
+        const galleryIdFromPath = matchPath ? matchPath[1] : '';
+        const initialPage = matchPath ? Math.max(0, parseInt(matchPath[2], 10) - 1) : 0;
 
-        const extMap = { j: 'jpg', p: 'png', g: 'gif', w: 'webp' };
         let cdnOrigin = 'https://i.nhentai.net';
         const curImgSrc = document.querySelector('#image-container img')?.src;
         if (curImgSrc) {
           try { cdnOrigin = new URL(curImgSrc).origin; } catch {}
         }
 
-        const mediaId = gallery.media_id;
-        const urls = gallery.images.pages.map((p, i) => `${cdnOrigin}/galleries/${mediaId}/${i + 1}.${extMap[p.t] || 'jpg'}`);
-        const matchPath = location.pathname.match(/^\/g\/(\d+)\/(\d+)/);
-        const galleryId = matchPath ? matchPath[1] : String(gallery.id || '');
-        const initialPage = matchPath ? Math.max(0, parseInt(matchPath[2], 10) - 1) : 0;
+        const extMap = { j: 'jpg', p: 'png', g: 'gif', w: 'webp' };
+        let gallery = window._gallery;
+        if (typeof gallery === 'string') {
+          try { gallery = JSON.parse(gallery); } catch { gallery = null; }
+        }
+
+        let urls = null;
+        if (gallery && gallery.images?.pages?.length) {
+          const mediaId = gallery.media_id;
+          urls = gallery.images.pages.map((p, i) => `${cdnOrigin}/galleries/${mediaId}/${i + 1}.${extMap[p.t] || 'jpg'}`);
+        }
+
+        // Fallback to nhentai API v2 (used by the SvelteKit frontend where window._gallery was removed)
+        if ((!urls || urls.length === 0) && galleryIdFromPath) {
+          try {
+            const res = await fetch(`/api/v2/galleries/${galleryIdFromPath}`, { credentials: 'same-origin' });
+            if (res.ok) {
+              const apiData = await res.json();
+              gallery = apiData;
+              if (Array.isArray(apiData?.pages) && apiData.pages.length > 0) {
+                urls = apiData.pages
+                  .map((p) => (p?.path ? `${cdnOrigin}/${String(p.path).replace(/^\/+/, '')}` : null))
+                  .filter(Boolean);
+              } else if (apiData?.images?.pages?.length && apiData?.media_id) {
+                urls = apiData.images.pages.map(
+                  (p, i) => `${cdnOrigin}/galleries/${apiData.media_id}/${i + 1}.${extMap[p.t] || 'jpg'}`
+                );
+              }
+            }
+          } catch (err) {
+            console.warn('[MangaReader+] nhentai API v2 fetch failed:', err);
+          }
+        }
+
+        if (!urls || urls.length === 0) return null;
+
+        const galleryId = galleryIdFromPath || String(gallery?.id || '');
+        const cleanDocTitle = document.title.replace(/\s*-\s*Page\s+\d+.*$/i, '').trim();
 
         return {
           urls,
           initialPage,
           meta: {
-            comicTitle: gallery.title?.japanese || gallery.title?.pretty || gallery.title?.english || document.title,
+            comicTitle: gallery?.title?.japanese || gallery?.title?.pretty || gallery?.title?.english || cleanDocTitle || document.title,
             chapterTitle: `#${galleryId}`,
             chapterProgressText: '',
             prevHref: null,
@@ -297,15 +327,22 @@
       id: 'jmcomic',
       match: () => /(?:18comic|jmcomic|jm-comic|jm18c)/i.test(location.hostname) && /\/photo\/\d+/.test(location.pathname),
       extract: async () => {
-        const imgs = document.querySelectorAll('.scramble-page img, .panel-body img.lazy_img, .row.thumb-overlay-albums img');
+        const photoImgs = document.querySelectorAll('img[id^="album_photo_"]');
+        const imgs = photoImgs.length > 0
+          ? photoImgs
+          : document.querySelectorAll('.scramble-page:not(.thewayhome) img.lazy_img, .panel-body img.lazy_img, .row.thumb-overlay-albums img');
         const urls = [];
         const seen = new Set();
         imgs.forEach((img) => {
+          // Skip ad/promo banners (wrapped in links or inside .thewayhome)
+          if (img.closest('a, .thewayhome')) return;
           const src = img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('src');
-          if (!src || /blank\.jpg|loading\.gif|\/media\/logo/i.test(src) || seen.has(src)) return;
+          if (!src || /blank\.jpg|loading\.gif|\/media\/logo|\/static\/resources\/images\//i.test(src) || seen.has(src)) return;
           seen.add(src);
           urls.push(src);
         });
+        const mediaPhotoUrls = urls.filter((u) => /\/media\/photos\//i.test(u));
+        const finalUrls = mediaPhotoUrls.length > 0 ? mediaPhotoUrls : urls;
 
         const aidMatch = location.pathname.match(/\/photo\/(\d+)/);
         const aid = Number(window.aid || (aidMatch ? aidMatch[1] : 0));
@@ -317,7 +354,7 @@
         const nextHref = findLinkByText(/下一[話话章]/);
 
         return {
-          urls,
+          urls: finalUrls,
           aid,
           scrambleId,
           meta: {
@@ -1825,11 +1862,32 @@
 
   // --- Main Reader App ---
 
+  let activeTeardown = null;
+  let activeRouteKey = null;
+  let mountToken = 0;
+
+  function teardownReader() {
+    if (typeof activeTeardown === 'function') {
+      try { activeTeardown(); } catch {}
+    }
+    activeTeardown = null;
+    activeRouteKey = null;
+  }
+
   async function init() {
+    const token = ++mountToken;
+    const routeKey = location.pathname + location.search;
     const adapter = detectAdapter();
-    if (!adapter) return;
+    if (!adapter) {
+      teardownReader();
+      return;
+    }
+
+    if (activeTeardown && activeRouteKey === routeKey) return;
+    teardownReader();
 
     const extracted = await adapter.extract();
+    if (token !== mountToken) return;
     if (!extracted || !extracted.urls || extracted.urls.length === 0) {
       console.warn(`[MangaReader+] (${adapter.id}) No chapter images found on this page.`);
       return;
@@ -2857,7 +2915,7 @@
     });
 
     // Keyboard shortcuts (capture phase so site-native key handlers don't conflict)
-    window.addEventListener('keydown', (e) => {
+    const onKeyDown = (e) => {
       if (e.target.closest('input:not([type="range"]), textarea, select')) return;
 
       if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'o' || e.key === 'O')) {
@@ -2991,11 +3049,52 @@
         e.preventDefault();
         e.stopImmediatePropagation();
       }
-    }, true);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+
+    activeRouteKey = routeKey;
+    activeTeardown = () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      if (stripObserver) {
+        stripObserver.disconnect();
+        stripObserver = null;
+      }
+      clearTimeout(tipShowTimer);
+      clearTimeout(tipCoolTimer);
+      clearTimeout(toastTimer);
+      document.documentElement.classList.remove('cms-active');
+      document.body.classList.remove('cms-active');
+      root.remove();
+      styleEl.remove();
+      document.getElementById('cms-restore-btn')?.remove();
+    };
 
     syncSettingsUI();
     renderStage();
   }
+
+  let routeCheckTimer = null;
+  function scheduleRouteCheck() {
+    clearTimeout(routeCheckTimer);
+    routeCheckTimer = setTimeout(() => {
+      init();
+    }, 60);
+  }
+
+  // Watch SPA route changes (e.g. nhentai SvelteKit client-side navigation)
+  const origPushState = history.pushState;
+  history.pushState = function (...args) {
+    const ret = origPushState.apply(this, args);
+    scheduleRouteCheck();
+    return ret;
+  };
+  const origReplaceState = history.replaceState;
+  history.replaceState = function (...args) {
+    const ret = origReplaceState.apply(this, args);
+    scheduleRouteCheck();
+    return ret;
+  };
+  window.addEventListener('popstate', scheduleRouteCheck);
 
   if (document.readyState === 'complete' || window.contentKey || window._gallery) {
     init();

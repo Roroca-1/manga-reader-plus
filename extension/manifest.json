@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "网页漫画增强阅读器",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "桌面级网页漫画增强阅读器：悬浮工具栏、单页/双页/条漫、翻页方向、画面适配与缩放、页面总览与完整快捷键。",
   "content_scripts": [
     {
@@ -15,11 +15,11 @@
         "*://*.2024copy.com/comic/*/chapter/*",
         "*://*.2025copy.com/comic/*/chapter/*",
         "*://*.2026copy.com/comic/*/chapter/*",
-        "*://nhentai.net/g/*/*",
-        "*://*.nhentai.net/g/*/*",
-        "*://*.nhentai.to/g/*/*",
-        "*://*.nhentai.xxx/g/*/*",
-        "*://*.nhentai.website/g/*/*",
+        "*://nhentai.net/*",
+        "*://*.nhentai.net/*",
+        "*://*.nhentai.to/g/*",
+        "*://*.nhentai.xxx/g/*",
+        "*://*.nhentai.website/g/*",
         "*://*.18comic.vip/photo/*",
         "*://*.18comic.org/photo/*",
         "*://*.18comic.ink/photo/*",
