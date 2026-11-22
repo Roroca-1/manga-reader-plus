@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页漫画增强阅读器
 // @namespace    https://github.com/Roroca-1/manga-reader-plus
-// @version      1.3.0
+// @version      1.3.1
 // @description  桌面级网页漫画增强阅读器：悬浮工具栏、单页/双页/条漫模式、左右翻页方向、画面适配与缩放、封面单显、跨页自动识别、页面总览与完整快捷键支持。
 // @author       Roroca-1
 // @license      MIT
@@ -13,15 +13,33 @@
 // @match        *://*.copymanga.tv/comic/*/chapter/*
 // @match        *://*.copymanga.site/comic/*/chapter/*
 // @match        *://*.copymanga.org/comic/*/chapter/*
+// @match        *://*.copymanga.net/comic/*/chapter/*
+// @match        *://*.copymanga.com/comic/*/chapter/*
+// @match        *://*.2024copy.com/comic/*/chapter/*
 // @match        *://*.2025copy.com/comic/*/chapter/*
 // @match        *://*.2026copy.com/comic/*/chapter/*
 // @match        *://nhentai.net/g/*/*
+// @match        *://*.nhentai.net/g/*/*
+// @match        *://*.nhentai.to/g/*/*
+// @match        *://*.nhentai.xxx/g/*/*
+// @match        *://*.nhentai.website/g/*/*
 // @match        *://*.18comic.vip/photo/*
 // @match        *://*.18comic.org/photo/*
+// @match        *://*.18comic.ink/photo/*
+// @match        *://*.18comic.biz/photo/*
+// @match        *://*.18comic.tw/photo/*
 // @match        *://*.jmcomic.me/photo/*
 // @match        *://*.jmcomic1.me/photo/*
+// @match        *://*.jm-comic.cc/photo/*
+// @match        *://*.jm-comic1.cc/photo/*
+// @match        *://*.jm-comic2.cc/photo/*
+// @match        *://*.jm-comic3.cc/photo/*
 // @match        *://*.zerobyw33.com/*
-// @match        *://*.zerobyw*.com/*
+// @match        *://*.zerobyw.com/*
+// @include      /^https?:\/\/([^/]*\.)?(mangacopy|copymanga|\d{4}copy)\.[^/]+\/comic\/[^/]+\/chapter\//i
+// @include      /^https?:\/\/([^/]*\.)?nhentai\.[^/]+\/g\/\d+\/\d+/i
+// @include      /^https?:\/\/([^/]*\.)?(18comic|jmcomic\d*|jm-comic\d*|jm18c[^.]*)\.[^/]+\/photo\/\d+/i
+// @include      /^https?:\/\/([^/]*\.)?zerobyw[a-z0-9-]*\.[^/]+\//i
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -234,10 +252,10 @@
       },
     },
 
-    // 2. nhentai.net
+    // 2. nhentai & mirrors
     {
       id: 'nhentai',
-      match: () => /(?:^|\.)nhentai\.net$/i.test(location.hostname) && /^\/g\/\d+\/\d+\/?$/.test(location.pathname),
+      match: () => /(?:^|\.)nhentai\./i.test(location.hostname) && /^\/g\/\d+\/\d+\/?$/.test(location.pathname),
       extract: async () => {
         let gallery = window._gallery;
         if (typeof gallery === 'string') {
@@ -277,7 +295,7 @@
     // 3. 18comic / JMComic & mirrors (with built-in canvas image unscrambling)
     {
       id: 'jmcomic',
-      match: () => /(?:18comic|jmcomic|jm-comic)/i.test(location.hostname) && /\/photo\/\d+/.test(location.pathname),
+      match: () => /(?:18comic|jmcomic|jm-comic|jm18c)/i.test(location.hostname) && /\/photo\/\d+/.test(location.pathname),
       extract: async () => {
         const imgs = document.querySelectorAll('.scramble-page img, .panel-body img.lazy_img, .row.thumb-overlay-albums img');
         const urls = [];
@@ -360,51 +378,59 @@
       },
     },
 
-    // 4. Zerobyw (Zero搬运网 / Discuz jameson_manhua)
+    // 4. Zerobyw (Zero搬运网 & mirrors)
     {
       id: 'zerobyw',
-      match: () => /zerobyw\d*\./i.test(location.hostname) && (
+      match: () => /zerobyw[a-z0-9-]*\./i.test(location.hostname) && (
+        /\/pc\/view\//i.test(location.pathname) ||
+        /[?&]zjid=\d+/i.test(location.search) ||
         /a=bofang/i.test(location.search) ||
         /\/manhua\//i.test(location.pathname) ||
-        Boolean(document.querySelector('.comic_wraCon img, .rd-manga img, #reader-container img, .uk-container img[src*="attachment"]'))
+        Boolean(document.querySelector('img.manga-image, .reader-image-frame img, .comic_wraCon img, .rd-manga img, #reader-container img'))
       ),
       extract: async () => {
         const selectors = [
+          'img.manga-image',
+          '.reader-image-frame img',
           '.comic_wraCon img',
           '.rd-manga img',
           '#reader-container img',
           '.comic-read img',
           '.uk-container .uk-grid img',
-          '.uk-section img',
           'img[src*="/data/attachment/"]',
         ];
         const urls = [];
         const seen = new Set();
         const isNoise = (src) => /avatar|uc_server|static\/image\/common|smiley|logo|qrcode|ads?\//i.test(src);
+        const normalizeUrl = (src) => (src.startsWith('//') ? `${location.protocol}${src}` : src);
 
         for (const sel of selectors) {
           const found = document.querySelectorAll(sel);
           if (found.length === 0) continue;
           found.forEach((img) => {
-            const src = img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('src');
-            if (!src || isNoise(src) || seen.has(src)) return;
+            const raw = img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('src');
+            if (!raw || isNoise(raw)) return;
+            const src = normalizeUrl(raw);
+            if (seen.has(src)) return;
             seen.add(src);
             urls.push(src);
           });
           if (urls.length > 0) break;
         }
 
-        const titleEl = document.querySelector('h1, .uk-breadcrumb li:last-child, .comic_title');
-        const titleRaw = titleEl?.textContent?.trim() || document.title.replace(/\s*[-_|].*$/, '');
-        const prevHref = findLinkByText(/上一[話话章页]/);
-        const nextHref = findLinkByText(/下一[話话章页]/);
-        const tocHref = findLinkByText(/目录|目錄|返回漫画|返回列表/) || '/';
+        const detailLink = document.querySelector('a[href*="/pc/details/"]');
+        const titleParts = document.title.split(/\s+-\s+/);
+        const comicTitle = detailLink?.textContent?.trim() || titleParts[0]?.trim() || document.title;
+        const chapterTitle = titleParts.length >= 3 ? `第 ${titleParts[1].trim()} 话` : '';
+        const prevHref = findLinkByText(/^上一[話话章页]$/);
+        const nextHref = findLinkByText(/^下一[話话章页]$/);
+        const tocHref = detailLink?.href || findLinkByText(/目录|目錄|返回漫画|返回列表/) || '/pc/pc/';
 
         return {
           urls,
           meta: {
-            comicTitle: titleRaw,
-            chapterTitle: '',
+            comicTitle,
+            chapterTitle,
             chapterProgressText: '',
             prevHref,
             nextHref,
@@ -2826,12 +2852,13 @@
       });
     });
 
-    // Keyboard shortcuts (instant, zero animation)
+    // Keyboard shortcuts (capture phase so site-native key handlers don't conflict)
     window.addEventListener('keydown', (e) => {
       if (e.target.closest('input:not([type="range"]), textarea, select')) return;
 
       if (e.altKey && (e.key === 'o' || e.key === 'O')) {
         e.preventDefault();
+        e.stopImmediatePropagation();
         toggleOriginalPage();
         return;
       }
@@ -2841,6 +2868,7 @@
       if (e.key === 'Escape') {
         if (popover.classList.contains('open') || gridModal.classList.contains('open') || helpModal.classList.contains('open')) {
           e.preventDefault();
+          e.stopImmediatePropagation();
           closeAllModals();
         }
         return;
@@ -2849,22 +2877,20 @@
       if (gridModal.classList.contains('open') || helpModal.classList.contains('open')) return;
 
       const isRtl = settings.direction === 'rtl';
+      let handled = true;
 
       switch (e.key) {
         case 'ArrowLeft':
         case 'a':
         case 'A':
-          e.preventDefault();
           stepPage(isRtl ? 1 : -1);
           break;
         case 'ArrowRight':
         case 'd':
         case 'D':
-          e.preventDefault();
           stepPage(isRtl ? -1 : 1);
           break;
         case ' ':
-          e.preventDefault();
           stepPage(e.shiftKey ? -1 : 1);
           break;
         case '[':
@@ -2897,14 +2923,11 @@
           showToast('条漫模式');
           break;
         case 'f':
-          e.preventDefault();
           pillFit.click();
           break;
         case 'F':
-          if (e.shiftKey) {
-            e.preventDefault();
-            root.querySelector('#cms-btn-fullscreen').click();
-          }
+          if (e.shiftKey) root.querySelector('#cms-btn-fullscreen').click();
+          else handled = false;
           break;
         case 'r':
         case 'R':
@@ -2953,8 +2976,15 @@
           renderStage(true);
           showToast('适应屏幕');
           break;
+        default:
+          handled = false;
       }
-    });
+
+      if (handled) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    }, true);
 
     syncSettingsUI();
     renderStage();
