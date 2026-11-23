@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页漫画增强阅读器
 // @namespace    https://github.com/Roroca-1/manga-reader-plus
-// @version      1.3.3
+// @version      1.3.4
 // @description  桌面级网页漫画增强阅读器：悬浮工具栏、单页/双页/条漫模式、左右翻页方向、画面适配与缩放、封面单显、跨页自动识别、页面总览与完整快捷键支持。
 // @author       Roroca-1
 // @license      MIT
@@ -36,10 +36,15 @@
 // @match        *://*.jm-comic3.cc/photo/*
 // @match        *://*.zerobyw33.com/*
 // @match        *://*.zerobyw.com/*
+// @match        *://e-hentai.org/s/*
+// @match        *://*.e-hentai.org/s/*
+// @match        *://exhentai.org/s/*
+// @match        *://*.exhentai.org/s/*
 // @include      /^https?:\/\/([^/]*\.)?(mangacopy|copymanga|\d{4}copy)\.[^/]+\/comic\/[^/]+\/chapter\//i
 // @include      /^https?:\/\/([^/]*\.)?nhentai\.[^/]+\//i
 // @include      /^https?:\/\/([^/]*\.)?(18comic|jmcomic\d*|jm-comic\d*|jm18c[^.]*)\.[^/]+\/photo\/\d+/i
 // @include      /^https?:\/\/([^/]*\.)?zerobyw[a-z0-9-]*\.[^/]+\//i
+// @include      /^https?:\/\/([^/]*\.)?e[x-]?hentai\.org\/s\/[0-9a-f]+\/\d+-\d+/i
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -68,6 +73,7 @@
     showHud: true,             // initial HUD visibility
     progressLine: true,        // hairline bottom progress bar when HUD is hidden
     preloadAhead: 2,           // gentle preloading to avoid CDN rate limits
+    imageQuality: 'high',      // 'high' | 'low' (for sites supporting multiple resolutions)
   };
 
   // --- Utilities ---
@@ -249,6 +255,10 @@
       cleanup: () => {
         window.onscroll = null;
         document.body.onmouseup = null;
+      },
+      transformUrl: (url, settings) => {
+        if (!url || settings.imageQuality !== 'low') return url;
+        return url.replace(/\/c(?:1500|1200)x(\.[a-z0-9]+)(\?.*)?$/i, '/c800x$1$2');
       },
     },
 
@@ -473,6 +483,216 @@
             nextHref,
             tocHref,
             chapterKey: location.pathname + location.search,
+          },
+        };
+      },
+    },
+
+    // 5. E-Hentai & ExHentai (lazy on-demand page resolution to respect rate limits)
+    {
+      id: 'ehentai',
+      match: () => /(?:^|\.)e-?hentai\.org$|(?:^|\.)exhentai\.org$/i.test(location.hostname) && /^\/s\/[0-9a-f]+\/\d+-\d+/i.test(location.pathname),
+      extract: async () => {
+        const pathMatch = location.pathname.match(/^\/s\/([0-9a-f]+)\/(\d+)-(\d+)/i);
+        if (!pathMatch) return null;
+        const currentImgKey = pathMatch[1];
+        const gid = pathMatch[2];
+        const currentPage = parseInt(pathMatch[3], 10);
+        const initialPage = Math.max(0, currentPage - 1);
+
+        const currentImgSrc = document.querySelector('#img')?.src || '';
+        const snText = document.querySelector('#i2 .sn')?.textContent || '';
+        const totalMatch = snText.match(/\/\s*(\d+)/);
+        const totalPages = Math.max(totalMatch ? parseInt(totalMatch[1], 10) : currentPage, currentPage, 1);
+
+        const galleryLink = document.querySelector('#i5 a[href*="/g/"], a[href*="/g/"]');
+        const galleryHref = galleryLink?.href || '/';
+        const galleryBaseUrl = galleryHref.split('?')[0].replace(/\/?$/, '/');
+
+        const titleRaw = document.querySelector('#i1 h1')?.textContent?.trim()
+          || document.title.replace(/\s*-\s*E[x-]?Hentai Galleries.*$/i, '').trim();
+
+        let showkey = typeof window.showkey === 'string' ? window.showkey : '';
+        if (!showkey) {
+          for (const s of document.querySelectorAll('script:not([src])')) {
+            const m = s.textContent.match(/var\s+showkey\s*=\s*["']([^"']+)["']/);
+            if (m) { showkey = m[1]; break; }
+          }
+        }
+        const apiUrl = typeof window.api_url === 'string' && window.api_url
+          ? window.api_url
+          : `${location.origin}/api.php`;
+
+        const pageKeyMap = new Map();
+        pageKeyMap.set(currentPage, currentImgKey);
+        document.querySelectorAll('a[href*="/s/"]').forEach((a) => {
+          const m = a.href.match(new RegExp(`/s/([0-9a-f]+)/${gid}-(\\d+)`, 'i'));
+          if (m) pageKeyMap.set(parseInt(m[2], 10), m[1]);
+        });
+
+        let perPage = 0;
+        const fetchedGalleryPages = new Set();
+        const inflightGalleryPages = new Map();
+
+        const fetchGalleryPage = async (pIdx) => {
+          if (fetchedGalleryPages.has(pIdx)) return;
+          if (inflightGalleryPages.has(pIdx)) return inflightGalleryPages.get(pIdx);
+
+          const task = (async () => {
+            try {
+              const url = pIdx === 0 ? galleryBaseUrl : `${galleryBaseUrl}?p=${pIdx}`;
+              const res = await fetch(url, { credentials: 'same-origin' });
+              if (!res.ok) return;
+              const html = await res.text();
+              const re = new RegExp(`/s/([0-9a-f]+)/${gid}-(\\d+)`, 'gi');
+              let count = 0;
+              let m;
+              while ((m = re.exec(html)) !== null) {
+                const pNum = parseInt(m[2], 10);
+                if (!pageKeyMap.has(pNum)) count++;
+                pageKeyMap.set(pNum, m[1]);
+              }
+              if (pIdx === 0 && !perPage) {
+                const nums = [...pageKeyMap.keys()].filter((n) => n <= 100);
+                const maxOnFirst = nums.length ? Math.max(...nums) : count;
+                if (maxOnFirst >= 40) perPage = 40;
+                else if (maxOnFirst >= 20) perPage = 20;
+                else if (count > 0) perPage = count;
+              }
+              fetchedGalleryPages.add(pIdx);
+            } catch (err) {
+              console.warn('[MangaReader+] E-Hentai gallery page fetch failed:', err);
+            } finally {
+              inflightGalleryPages.delete(pIdx);
+            }
+          })();
+
+          inflightGalleryPages.set(pIdx, task);
+          return task;
+        };
+
+        const ensurePageKey = async (pageNum) => {
+          if (pageKeyMap.has(pageNum)) return pageKeyMap.get(pageNum);
+          if (!galleryHref || galleryHref === '/') return null;
+
+          if (!perPage) {
+            await fetchGalleryPage(0);
+            if (pageKeyMap.has(pageNum)) return pageKeyMap.get(pageNum);
+          }
+
+          const step = perPage || 20;
+          const targetIdx = Math.floor((pageNum - 1) / step);
+          await fetchGalleryPage(targetIdx);
+          if (pageKeyMap.has(pageNum)) return pageKeyMap.get(pageNum);
+
+          // Fallback: try adjacent gallery page in case perPage differed
+          if (targetIdx > 0) await fetchGalleryPage(targetIdx - 1);
+          if (pageKeyMap.has(pageNum)) return pageKeyMap.get(pageNum);
+          await fetchGalleryPage(targetIdx + 1);
+          return pageKeyMap.get(pageNum) || null;
+        };
+
+        const parseImgSrcFromHtml = (html) => {
+          const m = html.match(/<img[^>]+id=["']img["'][^>]+src=["']([^"']+)["']/i)
+            || html.match(/<img[^>]+src=["']([^"']+)["'][^>]+id=["']img["']/i);
+          return m ? m[1].replace(/&amp;/g, '&') : null;
+        };
+
+        const parseNlFromHtml = (html) => {
+          const m = html.match(/nl\(\s*['"]([^'"]+)['"]\s*\)/i);
+          return m ? m[1] : null;
+        };
+
+        const nlMap = new Map();
+        const curLoadFail = document.querySelector('#loadfail')?.getAttribute('onclick') || '';
+        const curNl = parseNlFromHtml(curLoadFail);
+        if (curNl) nlMap.set(currentPage, curNl);
+
+        const resolvedCache = new Map();
+        const inflightPages = new Map();
+        if (currentImgSrc) resolvedCache.set(initialPage, currentImgSrc);
+
+        const resolveUrl = async (idx, forceReload = false) => {
+          if (!forceReload && resolvedCache.has(idx)) return resolvedCache.get(idx);
+          if (!forceReload && inflightPages.has(idx)) return inflightPages.get(idx);
+
+          const task = (async () => {
+            const pageNum = idx + 1;
+            const imgkey = await ensurePageKey(pageNum);
+            if (!imgkey) return null;
+
+            let imgUrl = null;
+            if (showkey && !forceReload) {
+              try {
+                const res = await fetch(apiUrl, {
+                  method: 'POST',
+                  credentials: 'same-origin',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    method: 'showpage',
+                    gid: Number(gid),
+                    page: pageNum,
+                    imgkey,
+                    showkey,
+                  }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (typeof data?.i3 === 'string') {
+                    imgUrl = parseImgSrcFromHtml(data.i3);
+                  }
+                  if (typeof data?.i6 === 'string') {
+                    const nlToken = parseNlFromHtml(data.i6);
+                    if (nlToken) nlMap.set(pageNum, nlToken);
+                  }
+                }
+              } catch {}
+            }
+
+            if (!imgUrl) {
+              try {
+                const nlToken = forceReload ? nlMap.get(pageNum) : null;
+                const pageUrl = `${location.origin}/s/${imgkey}/${gid}-${pageNum}`
+                  + (nlToken ? `?nl=${encodeURIComponent(nlToken)}` : '');
+                const res = await fetch(pageUrl, {
+                  credentials: 'same-origin',
+                });
+                if (res.ok) {
+                  const html = await res.text();
+                  imgUrl = parseImgSrcFromHtml(html);
+                  const nextNl = parseNlFromHtml(html);
+                  if (nextNl) nlMap.set(pageNum, nextNl);
+                }
+              } catch {}
+            }
+
+            if (imgUrl) resolvedCache.set(idx, imgUrl);
+            return imgUrl;
+          })();
+
+          inflightPages.set(idx, task);
+          try {
+            return await task;
+          } finally {
+            inflightPages.delete(idx);
+          }
+        };
+
+        const urls = Array.from({ length: totalPages }, (_, i) => (i === initialPage ? currentImgSrc : null));
+
+        return {
+          urls,
+          initialPage,
+          resolveUrl,
+          autoSwitchTimeoutMs: 7500,
+          meta: {
+            comicTitle: titleRaw,
+            chapterTitle: `G#${gid}`,
+            chapterProgressText: '',
+            prevHref: null,
+            nextHref: null,
+            tocHref: galleryHref,
+            chapterKey: `/ehentai/g/${gid}`,
           },
         };
       },
@@ -2064,6 +2284,16 @@
               <button type="button" class="cms-seg-btn" data-value="16">16 px</button>
             </div>
           </div>
+
+          ${typeof adapter.transformUrl === 'function' ? `
+          <div class="cms-field" id="cms-quality-field">
+            <span class="cms-field-label">图片画质（省流）</span>
+            <div class="cms-seg" data-setting="imageQuality">
+              <button type="button" class="cms-seg-btn" data-value="high">高清</button>
+              <button type="button" class="cms-seg-btn" data-value="low">省流</button>
+            </div>
+          </div>
+          ` : ''}
         </div>
 
         <div class="cms-pop-section">
@@ -2296,21 +2526,48 @@
 
     // --- Gentle Preloader ---
 
+    const resolvingPages = new Set();
+
+    function getPageUrl(idx) {
+      const raw = urls[idx];
+      if (!raw) return raw;
+      return typeof adapter.transformUrl === 'function' ? adapter.transformUrl(raw, settings) : raw;
+    }
+
     function preloadPage(idx) {
       if (idx < 0 || idx >= total || preloadCache.has(idx)) return;
-      const img = new Image();
-      img.decoding = 'async';
-      img.onload = () => {
-        const isWide = img.naturalWidth > img.naturalHeight * 1.12;
-        const prev = pageDimensions.get(idx);
-        pageDimensions.set(idx, { w: img.naturalWidth, h: img.naturalHeight, isWide });
-        if (!prev && isWide && settings.mode === 'double') {
-          const spread = getSpreadIndices(currentIndex);
-          if (spread.includes(idx)) renderStage();
-        }
+      const startPreload = (url) => {
+        if (!url || preloadCache.has(idx)) return;
+        const img = new Image();
+        img.decoding = 'async';
+        img.onload = () => {
+          const isWide = img.naturalWidth > img.naturalHeight * 1.12;
+          const prev = pageDimensions.get(idx);
+          pageDimensions.set(idx, { w: img.naturalWidth, h: img.naturalHeight, isWide });
+          if (!prev && isWide && settings.mode === 'double') {
+            const spread = getSpreadIndices(currentIndex);
+            if (spread.includes(idx)) renderStage();
+          }
+        };
+        img.src = url;
+        preloadCache.set(idx, img);
       };
-      img.src = urls[idx];
-      preloadCache.set(idx, img);
+
+      const existing = getPageUrl(idx);
+      if (existing) {
+        startPreload(existing);
+      } else if (typeof extracted.resolveUrl === 'function' && !resolvingPages.has(idx)) {
+        resolvingPages.add(idx);
+        extracted.resolveUrl(idx)
+          .then((u) => {
+            if (u) {
+              urls[idx] = u;
+              startPreload(getPageUrl(idx));
+            }
+          })
+          .catch(() => {})
+          .finally(() => resolvingPages.delete(idx));
+      }
     }
 
     function preloadAround(idx) {
@@ -2321,6 +2578,7 @@
     // --- Stage Rendering ---
 
     let stripObserver = null;
+    let lazyLoadObserver = null;
     let stripRendered = false;
 
     function createImageElement(idx, priority = false) {
@@ -2342,7 +2600,70 @@
       stateBox.className = 'cms-page-state';
       stateBox.innerHTML = `<div class="cms-spinner"></div><span>正在加载第 ${idx + 1} 页…</span>`;
 
+      let stallTimer = null;
+      let autoRetries = 0;
+      const maxAutoRetries = extracted.autoSwitchTimeoutMs ? 2 : 0;
+
+      const clearStallTimer = () => {
+        if (stallTimer) {
+          clearTimeout(stallTimer);
+          stallTimer = null;
+        }
+      };
+
+      const assignImgSrc = (url) => {
+        clearStallTimer();
+        img.src = url;
+        if (img.complete && img.naturalWidth > 0) {
+          finalizeVisual(true);
+          return;
+        }
+        if (extracted.autoSwitchTimeoutMs && typeof extracted.resolveUrl === 'function' && autoRetries < maxAutoRetries) {
+          stallTimer = setTimeout(() => {
+            if (img.complete && img.naturalWidth > 0) return;
+            if (!slot.isConnected) return;
+            autoRetries++;
+            stateBox.style.display = 'flex';
+            stateBox.innerHTML = `<div class="cms-spinner"></div><span>节点响应缓慢，正在切换节点 (${autoRetries}/${maxAutoRetries})…</span>`;
+            loadImage(true);
+          }, extracted.autoSwitchTimeoutMs);
+        }
+      };
+
+      const loadImage = (forceReload = false) => {
+        clearStallTimer();
+        const existing = getPageUrl(idx);
+        if (!forceReload && existing) {
+          assignImgSrc(existing);
+          return;
+        }
+        if (typeof extracted.resolveUrl === 'function') {
+          extracted.resolveUrl(idx, forceReload)
+            .then((u) => {
+              if (!slot.isConnected) return;
+              if (!u) { showError(); return; }
+              urls[idx] = u;
+              assignImgSrc(getPageUrl(idx));
+            })
+            .catch(showError);
+          return;
+        }
+        if (existing) {
+          assignImgSrc(existing + (existing.includes('?') ? '&' : '?') + '_r=' + Date.now());
+        } else {
+          showError();
+        }
+      };
+
       const showError = () => {
+        clearStallTimer();
+        if (extracted.autoSwitchTimeoutMs && typeof extracted.resolveUrl === 'function' && autoRetries < maxAutoRetries && slot.isConnected) {
+          autoRetries++;
+          stateBox.style.display = 'flex';
+          stateBox.innerHTML = `<div class="cms-spinner"></div><span>加载失败，正在切换节点 (${autoRetries}/${maxAutoRetries})…</span>`;
+          loadImage(true);
+          return;
+        }
         img.style.display = 'none';
         stateBox.style.display = 'flex';
         stateBox.innerHTML = `
@@ -2351,17 +2672,19 @@
         `;
         stateBox.querySelector('button').addEventListener('click', (e) => {
           e.stopPropagation();
+          autoRetries = maxAutoRetries;
           stateBox.innerHTML = `<div class="cms-spinner"></div><span>正在重试…</span>`;
-          img.src = urls[idx] + (urls[idx].includes('?') ? '&' : '?') + '_r=' + Date.now();
+          loadImage(true);
         });
       };
 
       const finalizeVisual = (isCached) => {
+        clearStallTimer();
         stateBox.style.display = 'none';
         let visualEl = img;
         if (typeof adapter.renderCanvas === 'function') {
           try {
-            const canvas = adapter.renderCanvas(img, urls[idx], extracted);
+            const canvas = adapter.renderCanvas(img, getPageUrl(idx), extracted);
             if (canvas) {
               canvas.className = 'cms-page-img';
               canvas.setAttribute('aria-label', `第 ${idx + 1} 页`);
@@ -2390,10 +2713,11 @@
       img.style.display = 'none';
       slot.appendChild(stateBox);
       slot.appendChild(img);
-      img.src = urls[idx];
 
-      if (img.complete && img.naturalWidth > 0) {
-        finalizeVisual(true);
+      if (!urls[idx] && !priority && settings.mode === 'strip' && typeof extracted.resolveUrl === 'function') {
+        slot._triggerLazyLoad = () => loadImage(false);
+      } else {
+        loadImage(false);
       }
 
       return slot;
@@ -2449,6 +2773,26 @@
           stripRendered = true;
 
           if (stripObserver) stripObserver.disconnect();
+          if (lazyLoadObserver) lazyLoadObserver.disconnect();
+          if (typeof extracted.resolveUrl === 'function') {
+            lazyLoadObserver = new IntersectionObserver(
+              (entries) => {
+                for (const entry of entries) {
+                  if (!entry.isIntersecting) continue;
+                  const slot = entry.target;
+                  lazyLoadObserver.unobserve(slot);
+                  if (typeof slot._triggerLazyLoad === 'function') {
+                    slot._triggerLazyLoad();
+                    slot._triggerLazyLoad = null;
+                  }
+                }
+              },
+              { root: stage, rootMargin: '900px 0px' }
+            );
+            list.querySelectorAll('.cms-page-slot').forEach((slot) => {
+              if (typeof slot._triggerLazyLoad === 'function') lazyLoadObserver.observe(slot);
+            });
+          }
           stripObserver = new IntersectionObserver(
             (entries) => {
               let best = null;
@@ -2485,6 +2829,10 @@
       if (stripObserver) {
         stripObserver.disconnect();
         stripObserver = null;
+      }
+      if (lazyLoadObserver) {
+        lazyLoadObserver.disconnect();
+        lazyLoadObserver = null;
       }
 
       const spreadIndices = getSpreadIndices(currentIndex);
@@ -2649,12 +2997,15 @@
       closePopover();
       if (!thumbsBuilt) {
         const frag = document.createDocumentFragment();
-        urls.forEach((url, i) => {
+        urls.forEach((_, i) => {
+          const url = getPageUrl(i);
           const card = document.createElement('button');
           card.type = 'button';
           card.className = 'cms-thumb-card';
           card.dataset.page = String(i);
-          card.innerHTML = `<img src="${url}" alt="第 ${i + 1} 页" loading="lazy" decoding="async" /><span class="cms-thumb-num">${i + 1}</span>`;
+          card.innerHTML = url
+            ? `<img src="${url}" alt="第 ${i + 1} 页" loading="lazy" decoding="async" /><span class="cms-thumb-num">${i + 1}</span>`
+            : `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--cms-ink-muted);font-size:13px;">第 ${i + 1} 页</div><span class="cms-thumb-num">${i + 1}</span>`;
           card.addEventListener('click', () => {
             gridModal.classList.remove('open');
             goToPage(i);
@@ -2868,7 +3219,16 @@
       settings[key] = key === 'stripGap' ? Number(raw) : raw;
       saveSettings(settings);
       syncSettingsUI();
-      renderStage(key === 'fit' || key === 'stripGap' || key === 'theme');
+      if (key === 'imageQuality') {
+        preloadCache.clear();
+        stripRendered = false;
+        thumbsBuilt = false;
+        thumbGrid.innerHTML = '';
+        renderStage(false);
+        showToast(`画质：${settings.imageQuality === 'low' ? '省流' : '高清'}`);
+      } else {
+        renderStage(key === 'fit' || key === 'stripGap' || key === 'theme');
+      }
     });
 
     zoomRange.addEventListener('input', () => setZoom(Number(zoomRange.value)));
@@ -3058,6 +3418,10 @@
       if (stripObserver) {
         stripObserver.disconnect();
         stripObserver = null;
+      }
+      if (lazyLoadObserver) {
+        lazyLoadObserver.disconnect();
+        lazyLoadObserver = null;
       }
       clearTimeout(tipShowTimer);
       clearTimeout(tipCoolTimer);
